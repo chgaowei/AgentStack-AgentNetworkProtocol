@@ -1,8 +1,9 @@
+from typing import Optional, Union
 from crewai_tools import tool
 from dotenv import load_dotenv
 import os
 
-from agent_connect.simple_node import SimpleNode
+from agent_connect.simple_node import SimpleNode, SimpleNodeSession
 import json
 
 load_dotenv()
@@ -53,43 +54,76 @@ def generate_did_info(node: SimpleNode, did_document_path: str) -> None:
             }, f, indent=2)
         print(f"DID information saved to {did_document_path}")
 
-agent_connect_simple_node = SimpleNode(host_domain, host_port, host_ws_path)
+
+async def new_session_callback(simple_session: SimpleNodeSession):
+    """
+    Callback function for new session established.
+    """
+    print(f"New session established from {simple_session.remote_did}")
+
+    while True:
+        message = await simple_session.receive_message()
+        # ToDo: add process code by user
+
+agent_connect_simple_node = SimpleNode(host_domain=host_domain, 
+                                       new_session_callback=new_session_callback,
+                                       host_port=host_port, 
+                                       host_ws_path=host_ws_path)
 generate_did_info(agent_connect_simple_node, did_document_path)
 agent_connect_simple_node.run()
 
+@tool("Connect to Agent by DID")
+async def connect_to_agent(destination_did: str) -> Optional[SimpleNodeSession]:
+    """
+    Connect to another agent through agent-connect node.
+    
+    Args:
+        destination_did: DID of the agent to connect to
+    Returns:
+        SimpleNodeSession: Session object if connection was established successfully, None otherwise
+    """
+    try:
+        session = await agent_connect_simple_node.connect_to_did(destination_did)
+        if session:
+            print(f"Successfully connected to agent: {destination_did}")
+            return session
+        return None
+    except Exception as e:
+        print(f"Failed to connect to agent: {e}")
+        return None
+
 @tool("Send Message to Agent by DID")
-async def send_message(message: str, destination_did: str) -> bool:
+async def send_message(session: SimpleNodeSession, message: Union[str, bytes]) -> bool:
     """
     Send a message through agent-connect node.
     
     Args:
         message: Message content to be sent
-        destination_did: DID of the recipient agent
+        session: SimpleNodeSession object for the connection
     Returns:
         bool: True if message was sent successfully, False otherwise
     """
     try:
-        await agent_connect_simple_node.send_message(message, destination_did)
-        print(f"Successfully sent message: {message}")
-        return True
+        success = await session.send_message(message)
+        if success:
+            print(f"Successfully sent message to {session.remote_did}")
+            return True
+        else:
+            print(f"Failed to send message to {session.remote_did}")
+            return False
     except Exception as e:
         print(f"Failed to send message: {e}")
         return False
 
-@tool("Receive Message from Agent")
-async def receive_message() -> tuple[str, str]:
+@tool("Receive Message from Agent") 
+async def receive_message(session: SimpleNodeSession) -> Optional[bytes]:
     """
     Receive message from agent-connect node.
     
+    Args:
+        session: SimpleNodeSession object for the connection
     Returns:
-        tuple[str, str]: Sender DID and received message content, empty string if no message or error occurred
+        bytes: Received message content, None if no message or error occurred
     """
-    try:
-        sender_did, message = await agent_connect_simple_node.receive_message()
-        if message:
-            print(f"Received message from {sender_did}: {message}")
-            return sender_did, message
-        return "", ""
-    except Exception as e:
-        print(f"Failed to receive message: {e}")
-        return "", ""
+    return await session.receive_message()
+
